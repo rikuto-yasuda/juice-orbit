@@ -10,3 +10,6 @@ dist/
 .env
 .env.*
 .ipynb_checkpoints/
+*.log
+*.out
+python_JUICE/orbit_check/occ.xls
