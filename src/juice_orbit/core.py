@@ -16,6 +16,10 @@ import spiceypy as spice
 ESA_JUICE_KERNELS = "https://spiftp.esac.esa.int/data/SPICE/JUICE/kernels"
 JUICE_METAKERNEL = "juice_crema_5_2.tm"
 DEFAULT_TARGETS = ("JUICE", "IO", "EUROPA", "GANYMEDE", "CALLISTO")
+GALILEAN_MOONS = ("IO", "EUROPA", "GANYMEDE", "CALLISTO")
+# Package-defined moon-centred frames, not frames registered in SPICE.
+CUSTOM_FRAMES = ("JUPITER_FACING", "SUN_FACING", "EARTH_FACING", "PHI_ORB")
+PHI_ORB_STEP_S = 10.0
 OutputType = Literal["full", "xyz", "r_lat_lon"]
 
 
@@ -143,7 +147,10 @@ def make_times(start: str | datetime, end: str | datetime | None = None,
 
 
 def _jupiter_facing_rotation(state):
-    """IAU-to-custom rotation and its time derivative, from Jupiter's state."""
+    """IAU-to-custom rotation and its time derivative, from a body's state.
+
+    Used for JUPITER_FACING.
+    """
     z = np.array([0., 0., 1.])
     normal = np.cross(z, state[:3])
     norm = np.linalg.norm(normal)
@@ -156,26 +163,77 @@ def _jupiter_facing_rotation(state):
     return np.array([x, y, z]), np.array([dx, dy, np.zeros(3)])
 
 
+def _two_vector_axes(primary, d_primary, secondary, d_secondary):
+    """Unit primary axis, unit secondary axis orthogonalised to it, and rates."""
+    def unit(vector, rate):
+        norm = np.linalg.norm(vector)
+        if norm <= 1e-12:
+            raise ValueError('Frame-defining vectors are parallel; axes are undefined')
+        u = vector / norm
+        return u, (rate - u * (u @ rate)) / norm
+
+    a, da = unit(primary, d_primary)
+    projected = secondary - (secondary @ a) * a
+    d_projected = d_secondary - (d_secondary @ a + secondary @ da) * a - (secondary @ a) * da
+    if np.linalg.norm(projected) <= 1e-12 * np.linalg.norm(secondary):
+        raise ValueError('Frame-defining vectors are parallel; axes are undefined')
+    b, db = unit(projected, d_projected)
+    return a, da, b, db
+
+
+def _custom_rotation(frame: str, observer: str, et: float):
+    """Base-to-custom rotation and its time derivative at ``et``.
+
+    The base frame is J2000 for PHI_ORB and IAU_<observer> otherwise.
+    """
+    if frame == 'JUPITER_FACING':
+        state, _ = spice.spkezr('JUPITER', et, 'IAU_' + observer, 'NONE', observer)
+        return _jupiter_facing_rotation(state)
+    if frame in ('SUN_FACING', 'EARTH_FACING'):
+        # +X: moon-to-body line of sight; +Z: moon pole projected normal to it.
+        body = 'SUN' if frame == 'SUN_FACING' else 'EARTH'
+        state, _ = spice.spkezr(body, et, 'IAU_' + observer, 'NONE', observer)
+        x, dx, z, dz = _two_vector_axes(state[:3], state[3:], np.array([0., 0., 1.]), np.zeros(3))
+        return np.array([x, np.cross(z, x), z]), np.array([dx, np.cross(dz, x) + np.cross(z, dx), dz])
+    # PHI_ORB, as JUICE_<moon>_PHI_ORB in juice_sci_v21.tf: +Y moon-to-Jupiter,
+    # -X Jupiter's inertial velocity relative to the moon (+X orbital motion).
+    # The velocity's rate is a central difference over +/- PHI_ORB_STEP_S.
+    jupiter, _ = spice.spkezr('JUPITER', et, 'J2000', 'NONE', observer)
+    before, _ = spice.spkezr('JUPITER', et - PHI_ORB_STEP_S, 'J2000', 'NONE', observer)
+    after, _ = spice.spkezr('JUPITER', et + PHI_ORB_STEP_S, 'J2000', 'NONE', observer)
+    acceleration = (after[3:] - before[3:]) / (2 * PHI_ORB_STEP_S)
+    y, dy, x, dx = _two_vector_axes(jupiter[:3], jupiter[3:], -jupiter[3:], -acceleration)
+    return np.array([x, y, np.cross(x, y)]), np.array([dx, dy, np.cross(dx, y) + np.cross(x, dy)])
+
+
 def get_positions(times: str | datetime | Sequence[str | datetime], *,
                   targets: Iterable[str] = DEFAULT_TARGETS,
                   observer: str = "JUPITER", frame: str = "IAU_JUPITER",
                   output: OutputType = "full", aberration: str = "NONE") -> pd.DataFrame:
     """Get target states relative to ``observer`` in ``frame``.
 
-    JUPITER_FACING uses the moon's IAU north pole and points +X along the
-    equatorial projection of the moon-to-Jupiter vector. It requires a
-    Galilean moon observer and aberration='NONE'. Velocities include the
-    derivative of this time-dependent rotation.
+    Moon-centred custom frames (``CUSTOM_FRAMES``):
+
+    - JUPITER_FACING: +Z moon's IAU north pole, +X equatorial projection
+      of the moon-to-Jupiter vector.
+    - SUN_FACING / EARTH_FACING: +X exactly along the moon-to-Sun / Earth
+      line of sight, +Z moon's IAU north pole projected normal to +X.
+    - PHI_ORB: +Y exactly moon-to-Jupiter, +X moon's orbital velocity
+      normal to +Y, +Z orbit normal (JUICE_<moon>_PHI_ORB definition).
+
+    They require a Galilean moon observer and aberration='NONE'; vectors
+    are geometric. Velocities include the derivative of the
+    time-dependent rotation.
     """
-    custom = frame.upper() == 'JUPITER_FACING'
+    custom = frame.upper() in CUSTOM_FRAMES
     if custom:
+        frame = frame.upper()
         observer = observer.upper()
-        if observer not in ('IO', 'EUROPA', 'GANYMEDE', 'CALLISTO'):
-            raise ValueError('JUPITER_FACING requires a Galilean moon observer')
+        if observer not in GALILEAN_MOONS:
+            raise ValueError(f'{frame} requires a Galilean moon observer')
         if aberration.upper() != 'NONE':
-            raise ValueError('JUPITER_FACING currently requires aberration=NONE')
-        frame = 'JUPITER_FACING'
-    base_frame = 'IAU_' + observer if custom else frame
+            raise ValueError(f'{frame} currently requires aberration=NONE')
+    base_frame = ('J2000' if frame == 'PHI_ORB' else 'IAU_' + observer) if custom else frame
     time_list = [times] if isinstance(times, (str, datetime)) else list(times)
     target_list = [targets] if isinstance(targets, str) else list(targets)
     if not time_list:
@@ -185,8 +243,7 @@ def get_positions(times: str | datetime | Sequence[str | datetime], *,
         utc = _as_utc_string(timestamp)
         et = spice.str2et(utc)
         if custom:
-            jupiter, _ = spice.spkezr('JUPITER', et, base_frame, 'NONE', observer)
-            rotation, derivative = _jupiter_facing_rotation(jupiter)
+            rotation, derivative = _custom_rotation(frame, observer, et)
         for target in target_list:
             state, _ = spice.spkezr(target, et, base_frame, aberration, observer)
             if custom:

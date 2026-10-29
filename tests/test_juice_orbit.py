@@ -58,6 +58,28 @@ class OrbitToolsTest(unittest.TestCase):
         self.assertEqual(data.loc[0, "r_km"], 5.0)
         self.assertEqual(data.loc[0, "speed_km_s"], 3.0)
 
+    def test_two_vector_axes_rates(self):
+        def vectors(t):
+            return (np.array([np.cos(t), np.sin(t), 0.3]),
+                    np.array([-np.sin(t), np.cos(t), 0.1 * t]))
+
+        t, h = 0.2, 1e-6
+        primary, secondary = vectors(t)
+        rates = (np.array([-np.sin(t), np.cos(t), 0.]), np.array([-np.cos(t), -np.sin(t), 0.1]))
+        a, da, b, db = core._two_vector_axes(primary, rates[0], secondary, rates[1])
+        self.assertAlmostEqual(a @ b, 0.0)
+        self.assertAlmostEqual(np.linalg.norm(b), 1.0)
+        after = core._two_vector_axes(*vectors(t + h)[:1], rates[0], vectors(t + h)[1], rates[1])
+        before = core._two_vector_axes(*vectors(t - h)[:1], rates[0], vectors(t - h)[1], rates[1])
+        np.testing.assert_allclose((after[0] - before[0]) / (2 * h), da, atol=1e-6)
+        np.testing.assert_allclose((after[2] - before[2]) / (2 * h), db, atol=1e-6)
+
+    def test_custom_frames_require_moon_observer(self):
+        for frame in core.CUSTOM_FRAMES:
+            with self.assertRaises(ValueError):
+                juice_orbit.get_positions("2031-01-01T00:00:00Z", targets="JUICE",
+                                          observer="JUPITER", frame=frame)
+
     def test_plot_orbits(self):
         data = pd.DataFrame({
             "utc": ["2031-01-01T00:00:00Z", "2031-01-02T00:00:00Z"],

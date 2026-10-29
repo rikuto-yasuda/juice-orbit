@@ -67,6 +67,40 @@ def main():
                     workspace.results_dir / (moon.lower() + '_jupiter_facing.png'),
                     time_markers=3, title=f'JUICE / {moon} center / Jupiter-facing (+X)')
         print(f'PASS {moon} JUPITER_FACING: axes, distances, velocities, CSV, PNG')
+    # Official JUICE_<moon>_PHI_ORB frames are the reference for PHI_ORB.
+    spice.furnsh(str(workspace.data_dir / 'kernels/fk/juice_sci_v21.tf'))
+    custom_times = make_times('2035-06-01', '2035-06-01T06:00:00Z', 2, 'minutes')
+    for moon in ['IO', 'EUROPA', 'GANYMEDE', 'CALLISTO']:
+        for frame, body in [('SUN_FACING', 'SUN'), ('EARTH_FACING', 'EARTH'), ('PHI_ORB', 'JUPITER')]:
+            custom = get_positions(custom_times, targets=['JUICE', body], observer=moon, frame=frame)
+            iau = get_positions(custom_times, targets=['JUICE', body], observer=moon, frame='IAU_' + moon)
+            np.testing.assert_allclose(custom.r_km, iau.r_km)
+            reference = custom[custom.target == body]
+            if frame == 'PHI_ORB':
+                assert (reference.y_km > 0).all()
+                np.testing.assert_allclose(reference[['x_km', 'z_km']], 0, atol=1e-6)
+            else:
+                assert (reference.x_km > 0).all()
+                # Sun/Earth are ~1e9 km away, so allow 1e-12 relative error.
+                np.testing.assert_allclose(reference[['y_km', 'z_km']], 0, atol=1e-12 * reference.r_km.max())
+            nearby = get_positions(['2035-05-31T23:59:59.5Z', '2035-06-01T00:00:00.5Z'],
+                                   targets=['JUICE'], observer=moon, frame=frame)
+            positions = nearby[['x_km','y_km','z_km']].to_numpy()
+            np.testing.assert_allclose(positions[1]-positions[0],
+                                       custom.iloc[0][['vx_km_s','vy_km_s','vz_km_s']].to_numpy(dtype=float),
+                                       rtol=1e-4, atol=1e-4)
+            if frame == 'PHI_ORB' and moon != 'IO':
+                juice = custom[custom.target == 'JUICE']
+                expected = np.array([spice.spkezr('JUICE', spice.str2et(t), f'JUICE_{moon}_PHI_ORB', 'NONE', moon)[0]
+                                     for t in custom_times])
+                np.testing.assert_allclose(juice[['x_km','y_km','z_km','vx_km_s','vy_km_s','vz_km_s']].to_numpy(dtype=float),
+                                           expected, atol=1e-6)
+            name = f'{moon.lower()}_{frame.lower()}'
+            save_csv(custom, workspace.results_dir / (name + '.csv'))
+            plot_orbits(custom[custom.target == 'JUICE'], workspace.results_dir / (name + '.png'),
+                        time_markers=3, title=f'JUICE / {moon} center / {frame}')
+            print(f'PASS {moon} {frame}: axes, distances, velocities, CSV, PNG'
+                  + (', official JUICE frame' if frame == 'PHI_ORB' and moon != 'IO' else ''))
     coverage = spice.spkcov(str(workspace.data_dir / 'kernels/spk/juice_crema_5_2_v01.bsp'), -28)
     print('JUICE coverage:', [spice.et2utc(t, 'ISOC', 3) for t in coverage])
     try:
