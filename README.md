@@ -187,6 +187,11 @@ data = get_positions(
 | `CALLISTO` | `IAU_CALLISTO` |
 
 `observer` は原点、`frame` は軸の向きです。
+
+![IAU_JUPITER の説明図](docs/frames/frame_IAU_JUPITER.png)
+
+![IAU_<衛星> の説明図](docs/frames/frame_IAU_MOON.png)
+
 期間指定には `make_times(start, end, step, unit)` を使います。
 `unit` は `seconds` / `minutes` / `hours` / `days`。
 終了日時は刻みに一致するときだけ含まれます。タイムゾーンがない日時はUTC扱いです。
@@ -205,16 +210,32 @@ data = get_positions(
 本パッケージ専用の名前で、SPICE本体に登録されるフレームではありません。
 現在は `aberration="NONE"` のみ対応しています。
 
+![JUPITER_FACING の説明図](docs/frames/frame_JUPITER_FACING.png)
+
 ### その他の衛星中心座標系
 
 以下も4衛星を `observer` に指定して使います。条件（`aberration="NONE"`、
 幾何学的ベクトル、速度に回転の効果を含む）は `JUPITER_FACING` と同じです。
 
-| `frame` | 定義 |
-|---|---|
-| `SUN_FACING` | +X：衛星→太陽方向そのもの。+Z：衛星のIAU北極軸のうち+Xに直交する成分。+Y：Z×X。 |
-| `EARTH_FACING` | +X：衛星→地球の視線方向そのもの。+Z・+Yは `SUN_FACING` と同様。yz面が地球から見た天球面になります。 |
-| `PHI_ORB` | +Y：衛星→木星方向そのもの。+X：木星に対する衛星の公転速度（J2000慣性系）のうち+Yに直交する成分。+Z：X×Y（公転軌道面の法線）。 |
+#### `SUN_FACING`
+
++X：衛星→太陽方向そのもの。+Z：衛星のIAU北極軸のうち+Xに直交する成分。+Y：Z×X。
+
+![SUN_FACING の説明図](docs/frames/frame_SUN_FACING.png)
+
+#### `EARTH_FACING`
+
++X：衛星→地球の視線方向そのもの。+Z・+Yは `SUN_FACING` と同様。yz面が地球から見た天球面になります。
+
+![EARTH_FACING の説明図](docs/frames/frame_EARTH_FACING.png)
+
+#### `PHI_ORB`
+
++Y：衛星→木星方向そのもの。+X：木星に対する衛星の公転速度（J2000慣性系）のうち+Yに直交する成分。+Z：X×Y（公転軌道面の法線）。
+
+![PHI_ORB の説明図](docs/frames/frame_PHI_ORB.png)
+
+#### 共通の注意
 
 `PHI_ORB` はJUICE公式のフレームカーネル `juice_sci_v21.tf` にある
 `JUICE_<衛星>_PHI_ORB`（JUICE MAGチームのSPhiZ）と同じ定義です。
